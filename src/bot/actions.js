@@ -1,10 +1,16 @@
-// src/bot/actions.js - Enhanced with comprehensive notifications
+// src/bot/actions.js - Complete Fixed Version with Comprehensive Error Handling
 import { PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 
 export async function executeAction(message, member, moderationResult) {
   const { recommended_action, risk_level, reasoning, detected_categories } = moderationResult;
 
   try {
+    // CRITICAL: If member is null or left, skip all moderation except message deletion
+    if (!member && recommended_action !== 'WARN' && recommended_action !== 'DELETE') {
+      console.log(`[SKIPPED] Cannot execute ${recommended_action} - member not available`);
+      return 'SKIPPED';
+    }
+
     switch (recommended_action) {
       case 'ALLOW':
         return 'ALLOW';
@@ -42,7 +48,7 @@ export async function executeAction(message, member, moderationResult) {
 async function handleCaptchaRequired(message, member, reasoning) {
   try {
     if (message.deletable) {
-      await message.delete();
+      await message.delete().catch(err => console.log('Message already deleted'));
     }
 
     // Send DM notification about CAPTCHA requirement
@@ -53,10 +59,10 @@ async function handleCaptchaRequired(message, member, reasoning) {
         .setDescription(
           `Your message in **${message.guild.name}** was flagged for verification.\n\n` +
           `**Reason:** ${reasoning}\n\n` +
-          `To continue chatting, please complete CAPTCHA verification using the \`!verify\` command.`
+          `To continue chatting, please complete CAPTCHA verification using the \`/verify\` command.`
         )
         .addFields(
-          { name: '📝 How to Verify', value: '1. Type `!verify` in any channel\n2. Complete the CAPTCHA sent to your DMs\n3. Start chatting!', inline: false }
+          { name: '🔑 How to Verify', value: '1. Type `/verify` in any channel\n2. Complete the CAPTCHA sent to your DMs\n3. Start chatting!', inline: false }
         )
         .setFooter({ text: 'Created by Arvind Nag (RageXvenom Gamers) with ❤️' })
         .setTimestamp();
@@ -70,7 +76,7 @@ async function handleCaptchaRequired(message, member, reasoning) {
     const captchaMessage = await message.channel.send(
       `⚠️ <@${message.author.id}>, your account requires CAPTCHA verification before posting.\n\n` +
       `**Reason:** ${reasoning}\n` +
-      `Use the command: \`!verify\` (Check your DMs)\n\n` +
+      `Use the command: \`/verify\` (Check your DMs)\n\n` +
       `This is a security measure to protect our community.`
     );
 
@@ -79,7 +85,9 @@ async function handleCaptchaRequired(message, member, reasoning) {
     }, 30000);
 
     if (member && member.moderatable) {
-      await member.timeout(5 * 60 * 1000, 'CAPTCHA verification required');
+      await member.timeout(5 * 60 * 1000, 'CAPTCHA verification required').catch(err => {
+        console.log('Could not timeout member:', err.message);
+      });
     }
 
     // Notify mod log
@@ -164,9 +172,11 @@ async function handleDelete(message, reasoning, categories) {
       console.log('Could not DM user about deletion');
     }
 
-    // Delete the message
+    // Delete the message - with error handling
     if (message.deletable) {
-      await message.delete();
+      await message.delete().catch(err => {
+        console.log('Message already deleted or cannot be deleted:', err.message);
+      });
     }
 
     // Public notification
@@ -197,6 +207,20 @@ async function handleDelete(message, reasoning, categories) {
 
 async function handleMute(message, member, reasoning, categories) {
   try {
+    // CRITICAL: Check if member exists first
+    if (!member) {
+      console.log('[SKIPPED] Cannot mute: Member not found (likely left server)');
+      return;
+    }
+
+    // CRITICAL: Verify member still in guild before any action
+    try {
+      await message.guild.members.fetch(member.id);
+    } catch (error) {
+      console.log('[SKIPPED] Cannot mute: Member has left the server');
+      return;
+    }
+
     // Send DM notification BEFORE muting
     try {
       const dmEmbed = new EmbedBuilder()
@@ -218,22 +242,28 @@ async function handleMute(message, member, reasoning, categories) {
       console.log('Could not DM user about mute');
     }
 
-    // Delete the message
+    // Delete the message - with error handling
     if (message.deletable) {
-      await message.delete();
+      await message.delete().catch(err => {
+        console.log('Message already deleted:', err.message);
+      });
     }
 
     // Check if we can mute
-    if (!member || !member.moderatable) {
-      console.warn('Cannot mute user: insufficient permissions or user is moderator');
-      await handleDelete(message, reasoning, categories);
+    if (!member.moderatable) {
+      console.warn('[SKIPPED] Cannot mute user: insufficient permissions or user is moderator');
       return;
     }
 
     const muteDuration = 10 * 60 * 1000;
 
-    // Apply timeout
-    await member.timeout(muteDuration, `AI Moderation: ${reasoning}`);
+    // Apply timeout - with proper error handling
+    try {
+      await member.timeout(muteDuration, `AI Moderation: ${reasoning}`);
+    } catch (muteError) {
+      console.error('[ERROR] Failed to mute user:', muteError.message);
+      return;
+    }
 
     // Public notification
     const muteMessage = await message.channel.send(
@@ -258,13 +288,26 @@ async function handleMute(message, member, reasoning, categories) {
       messageContent: message.content.substring(0, 200)
     });
   } catch (error) {
-    console.error('Error muting user:', error);
-    await handleDelete(message, reasoning, categories);
+    console.error('[ERROR] Error in handleMute:', error);
   }
 }
 
 async function handleKick(message, member, reasoning, categories) {
   try {
+    // CRITICAL: Check if member exists first
+    if (!member) {
+      console.log('[SKIPPED] Cannot kick: Member not found (likely left server)');
+      return;
+    }
+
+    // CRITICAL: Verify member still in guild
+    try {
+      await message.guild.members.fetch(member.id);
+    } catch (error) {
+      console.log('[SKIPPED] Cannot kick: Member has left the server');
+      return;
+    }
+
     // Send DM notification BEFORE kicking (very important!)
     try {
       const dmEmbed = new EmbedBuilder()
@@ -288,18 +331,24 @@ async function handleKick(message, member, reasoning, categories) {
 
     // Delete the message
     if (message.deletable) {
-      await message.delete();
+      await message.delete().catch(err => {
+        console.log('Message already deleted:', err.message);
+      });
     }
 
     // Check if we can kick
-    if (!member || !member.kickable) {
-      console.warn('Cannot kick user: insufficient permissions or user is moderator');
-      await handleMute(message, member, reasoning, categories);
+    if (!member.kickable) {
+      console.warn('[SKIPPED] Cannot kick user: insufficient permissions or user is moderator');
       return;
     }
 
-    // Kick the user
-    await member.kick(`AI Moderation: ${reasoning}`);
+    // Kick the user - with error handling
+    try {
+      await member.kick(`AI Moderation: ${reasoning}`);
+    } catch (kickError) {
+      console.error('[ERROR] Failed to kick user:', kickError.message);
+      return;
+    }
 
     // Public notification
     const kickMessage = await message.channel.send(
@@ -324,8 +373,7 @@ async function handleKick(message, member, reasoning, categories) {
       severity: 'CRITICAL'
     });
   } catch (error) {
-    console.error('Error kicking user:', error);
-    await handleMute(message, member, reasoning, categories);
+    console.error('[ERROR] Error in handleKick:', error);
   }
 }
 

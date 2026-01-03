@@ -1,4 +1,4 @@
-// src/security/antinuke.js - Premium Anti-Nuke Protection System
+// src/security/antinuke.js - Fixed with proper error handling for database operations
 import { PermissionFlagsBits, EmbedBuilder, AuditLogEvent } from 'discord.js';
 import { 
   logSecurityEvent, 
@@ -24,14 +24,14 @@ const DEFAULT_SETTINGS = {
   kickLimit: 5,
   webhookCreateLimit: 3,
   memberPruneLimit: 10,
-  timeWindow: 10000, // 10 seconds
-  punishmentType: 'BAN', // BAN, KICK, STRIP_ROLES
+  timeWindow: 10000,
+  punishmentType: 'BAN',
   notifyOwner: true,
   lockdownOnTrigger: true,
   whitelist: [],
   nightmodeEnabled: false,
-  nightmodeStartHour: 23, // 11 PM
-  nightmodeEndHour: 7, // 7 AM
+  nightmodeStartHour: 23,
+  nightmodeEndHour: 7,
   nightmodeTimezone: 'UTC',
   nightmodeStricterLimits: true,
   nightmodeAutoLock: true,
@@ -52,52 +52,42 @@ export class AntiNukeSystem {
   }
 
   setupListeners() {
-    // Channel Delete Protection
     this.client.on('channelDelete', async (channel) => {
       await this.handleChannelDelete(channel);
     });
 
-    // Channel Create Protection
     this.client.on('channelCreate', async (channel) => {
       await this.handleChannelCreate(channel);
     });
 
-    // Role Delete Protection
     this.client.on('roleDelete', async (role) => {
       await this.handleRoleDelete(role);
     });
 
-    // Role Create Protection
     this.client.on('roleCreate', async (role) => {
       await this.handleRoleCreate(role);
     });
 
-    // Ban Protection
     this.client.on('guildBanAdd', async (ban) => {
       await this.handleBan(ban);
     });
 
-    // Kick Protection
     this.client.on('guildMemberRemove', async (member) => {
       await this.handleMemberRemove(member);
     });
 
-    // Webhook Create Protection
     this.client.on('webhookUpdate', async (channel) => {
       await this.handleWebhookUpdate(channel);
     });
 
-    // Role Update Protection (permissions escalation)
     this.client.on('roleUpdate', async (oldRole, newRole) => {
       await this.handleRoleUpdate(oldRole, newRole);
     });
 
-    // Guild Update Protection (vanity URL, name changes)
     this.client.on('guildUpdate', async (oldGuild, newGuild) => {
       await this.handleGuildUpdate(oldGuild, newGuild);
     });
 
-    // Bot Add Protection
     this.client.on('guildMemberAdd', async (member) => {
       if (member.user.bot) {
         await this.handleBotAdd(member);
@@ -110,21 +100,24 @@ export class AntiNukeSystem {
       return this.settings.get(guildId);
     }
 
-    const dbSettings = await getAntiNukeSettings(guildId);
-    const settings = dbSettings || DEFAULT_SETTINGS;
-    this.settings.set(guildId, settings);
-    return settings;
+    try {
+      const dbSettings = await getAntiNukeSettings(guildId);
+      const settings = dbSettings || DEFAULT_SETTINGS;
+      this.settings.set(guildId, settings);
+      return settings;
+    } catch (error) {
+      console.error('[ANTI-NUKE] Error loading settings:', error);
+      return DEFAULT_SETTINGS;
+    }
   }
 
   isNightMode(settings) {
     if (!settings.nightmodeEnabled) return false;
 
     try {
-      // Get current time in the specified timezone
       const now = new Date();
       const timezone = settings.nightmodeTimezone || 'UTC';
       
-      // Create date formatter for the timezone
       const timeString = now.toLocaleString('en-US', { 
         timeZone: timezone, 
         hour12: false, 
@@ -135,11 +128,9 @@ export class AntiNukeSystem {
       const startHour = settings.nightmodeStartHour || 23;
       const endHour = settings.nightmodeEndHour || 7;
 
-      // Handle overnight periods (e.g., 23:00 to 07:00)
       if (startHour > endHour) {
         return currentHour >= startHour || currentHour < endHour;
       } else {
-        // Handle same-day periods (e.g., 01:00 to 05:00)
         return currentHour >= startHour && currentHour < endHour;
       }
     } catch (error) {
@@ -155,17 +146,21 @@ export class AntiNukeSystem {
       return settings[limitType];
     }
 
-    // During night mode, use stricter limits
     const nightModeLimitKey = `nightmode${limitType.charAt(0).toUpperCase() + limitType.slice(1)}`;
     return settings[nightModeLimitKey] || settings[limitType];
   }
 
   async isWhitelisted(guildId, userId) {
-    const settings = await this.getSettings(guildId);
-    const trustedUsers = await getTrustedUsers(guildId);
-    
-    return settings.whitelist.includes(userId) || 
-           trustedUsers.some(u => u.discord_user_id === userId);
+    try {
+      const settings = await this.getSettings(guildId);
+      const trustedUsers = await getTrustedUsers(guildId);
+      
+      return settings.whitelist.includes(userId) || 
+             trustedUsers.some(u => u.discord_user_id === userId);
+    } catch (error) {
+      console.error('[ANTI-NUKE] Error checking whitelist:', error);
+      return false;
+    }
   }
 
   async trackAction(guildId, userId, actionType) {
@@ -179,7 +174,6 @@ export class AntiNukeSystem {
     const actions = actionTracker.get(key);
     const settings = await this.getSettings(guildId);
     
-    // Remove old actions outside time window
     const validActions = actions.filter(time => now - time < settings.timeWindow);
     validActions.push(now);
     
@@ -209,37 +203,38 @@ export class AntiNukeSystem {
       const { executor } = deleteLog;
       if (!executor) return;
 
-      // Check if user is whitelisted
       if (await this.isWhitelisted(channel.guild.id, executor.id)) {
         console.log(`[ANTI-NUKE] ${executor.tag} is whitelisted - allowing channel delete`);
         return;
       }
 
-      // Track action
       const count = await this.trackAction(channel.guild.id, executor.id, 'CHANNEL_DELETE');
 
       console.log(`[ANTI-NUKE] ${isNight ? '🌙 NIGHT MODE' : ''} ${executor.tag} deleted channel: ${count}/${limit}`);
 
       if (count >= limit) {
         await this.punishUser(channel.guild, executor, 'CHANNEL_DELETE', count, isNight);
-        
-        // Attempt to restore channel
         await this.restoreChannel(channel);
       }
 
-      await logSecurityEvent({
-        guildId: channel.guild.id,
-        userId: executor.id,
-        eventType: 'CHANNEL_DELETE',
-        severity: count >= limit ? 'CRITICAL' : 'HIGH',
-        details: {
-          channelName: channel.name,
-          channelId: channel.id,
-          actionCount: count,
-          nightMode: isNight,
-          limit: limit
-        }
-      });
+      // FIXED: Wrap database logging in try-catch
+      try {
+        await logSecurityEvent({
+          guildId: channel.guild.id,
+          userId: executor.id,
+          eventType: 'CHANNEL_DELETE',
+          severity: count >= limit ? 'CRITICAL' : 'HIGH',
+          details: {
+            channelName: channel.name,
+            channelId: channel.id,
+            actionCount: count,
+            nightMode: isNight,
+            limit: limit
+          }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling channel delete:', error);
@@ -274,13 +269,17 @@ export class AntiNukeSystem {
         await channel.delete('Anti-Nuke: Excessive channel creation');
       }
 
-      await logSecurityEvent({
-        guildId: channel.guild.id,
-        userId: executor.id,
-        eventType: 'CHANNEL_CREATE',
-        severity: count >= limit ? 'CRITICAL' : 'MEDIUM',
-        details: { channelName: channel.name, actionCount: count, nightMode: isNight, limit: limit }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: channel.guild.id,
+          userId: executor.id,
+          eventType: 'CHANNEL_CREATE',
+          severity: count >= limit ? 'CRITICAL' : 'MEDIUM',
+          details: { channelName: channel.name, actionCount: count, nightMode: isNight, limit: limit }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling channel create:', error);
@@ -313,13 +312,17 @@ export class AntiNukeSystem {
         await this.restoreRole(role);
       }
 
-      await logSecurityEvent({
-        guildId: role.guild.id,
-        userId: executor.id,
-        eventType: 'ROLE_DELETE',
-        severity: 'CRITICAL',
-        details: { roleName: role.name, actionCount: count, nightMode: isNight, limit: limit }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: role.guild.id,
+          userId: executor.id,
+          eventType: 'ROLE_DELETE',
+          severity: 'CRITICAL',
+          details: { roleName: role.name, actionCount: count, nightMode: isNight, limit: limit }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling role delete:', error);
@@ -352,13 +355,17 @@ export class AntiNukeSystem {
         await role.delete('Anti-Nuke: Excessive role creation');
       }
 
-      await logSecurityEvent({
-        guildId: role.guild.id,
-        userId: executor.id,
-        eventType: 'ROLE_CREATE',
-        severity: count >= limit ? 'HIGH' : 'MEDIUM',
-        details: { roleName: role.name, actionCount: count, nightMode: isNight, limit: limit }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: role.guild.id,
+          userId: executor.id,
+          eventType: 'ROLE_CREATE',
+          severity: count >= limit ? 'HIGH' : 'MEDIUM',
+          details: { roleName: role.name, actionCount: count, nightMode: isNight, limit: limit }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling role create:', error);
@@ -388,23 +395,25 @@ export class AntiNukeSystem {
 
       if (count >= limit) {
         await this.punishUser(ban.guild, executor, 'MASS_BAN', count, isNight);
-        
-        // Unban the victim
         await ban.guild.members.unban(ban.user.id, 'Anti-Nuke: Undoing malicious ban');
       }
 
-      await logSecurityEvent({
-        guildId: ban.guild.id,
-        userId: executor.id,
-        eventType: 'MASS_BAN',
-        severity: 'CRITICAL',
-        details: { 
-          bannedUser: ban.user.tag,
-          actionCount: count,
-          nightMode: isNight,
-          limit: limit
-        }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: ban.guild.id,
+          userId: executor.id,
+          eventType: 'MASS_BAN',
+          severity: 'CRITICAL',
+          details: { 
+            bannedUser: ban.user.tag,
+            actionCount: count,
+            nightMode: isNight,
+            limit: limit
+          }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling ban:', error);
@@ -436,18 +445,23 @@ export class AntiNukeSystem {
         await this.punishUser(member.guild, executor, 'MASS_KICK', count, isNight);
       }
 
-      await logSecurityEvent({
-        guildId: member.guild.id,
-        userId: executor.id,
-        eventType: 'MASS_KICK',
-        severity: 'HIGH',
-        details: { 
-          kickedUser: member.user.tag,
-          actionCount: count,
-          nightMode: isNight,
-          limit: limit
-        }
-      });
+      // FIXED: Wrap in try-catch to prevent UUID errors
+      try {
+        await logSecurityEvent({
+          guildId: member.guild.id,
+          userId: executor.id,
+          eventType: 'MASS_KICK',
+          severity: 'HIGH',
+          details: { 
+            kickedUser: member.user.tag,
+            actionCount: count,
+            nightMode: isNight,
+            limit: limit
+          }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling member remove:', error);
@@ -480,20 +494,23 @@ export class AntiNukeSystem {
       if (count >= limit) {
         await this.punishUser(channel.guild, executor, 'WEBHOOK_SPAM', count, isNight);
         
-        // Delete all webhooks in channel
         const webhooks = await channel.fetchWebhooks();
         for (const webhook of webhooks.values()) {
           await webhook.delete('Anti-Nuke: Malicious webhook');
         }
       }
 
-      await logSecurityEvent({
-        guildId: channel.guild.id,
-        userId: executor.id,
-        eventType: 'WEBHOOK_SPAM',
-        severity: 'HIGH',
-        details: { channelName: channel.name, actionCount: count, nightMode: isNight, limit: limit }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: channel.guild.id,
+          userId: executor.id,
+          eventType: 'WEBHOOK_SPAM',
+          severity: 'HIGH',
+          details: { channelName: channel.name, actionCount: count, nightMode: isNight, limit: limit }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling webhook update:', error);
@@ -504,7 +521,6 @@ export class AntiNukeSystem {
     const settings = await this.getSettings(newRole.guild.id);
     if (!settings.enabled) return;
 
-    // Check for dangerous permission additions
     const dangerousPerms = [
       PermissionFlagsBits.Administrator,
       PermissionFlagsBits.ManageGuild,
@@ -537,20 +553,22 @@ export class AntiNukeSystem {
       if (!executor || await this.isWhitelisted(newRole.guild.id, executor.id)) return;
 
       await this.punishUser(newRole.guild, executor, 'PERMISSION_ESCALATION', 1);
-      
-      // Revert role permissions
       await newRole.setPermissions(oldRole.permissions, 'Anti-Nuke: Reverting unauthorized permission changes');
 
-      await logSecurityEvent({
-        guildId: newRole.guild.id,
-        userId: executor.id,
-        eventType: 'PERMISSION_ESCALATION',
-        severity: 'CRITICAL',
-        details: {
-          roleName: newRole.name,
-          addedPermissions: addedPerms
-        }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: newRole.guild.id,
+          userId: executor.id,
+          eventType: 'PERMISSION_ESCALATION',
+          severity: 'CRITICAL',
+          details: {
+            roleName: newRole.name,
+            addedPermissions: addedPerms
+          }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling role update:', error);
@@ -587,18 +605,21 @@ export class AntiNukeSystem {
 
       await this.punishUser(newGuild, executor, 'GUILD_MODIFICATION', 1);
 
-      // Attempt to revert changes
       if (changes.some(c => c.type === 'NAME_CHANGE')) {
         await newGuild.setName(oldGuild.name, 'Anti-Nuke: Reverting unauthorized name change');
       }
 
-      await logSecurityEvent({
-        guildId: newGuild.id,
-        userId: executor.id,
-        eventType: 'GUILD_MODIFICATION',
-        severity: 'CRITICAL',
-        details: { changes }
-      });
+      try {
+        await logSecurityEvent({
+          guildId: newGuild.id,
+          userId: executor.id,
+          eventType: 'GUILD_MODIFICATION',
+          severity: 'CRITICAL',
+          details: { changes }
+        });
+      } catch (dbError) {
+        console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+      }
 
     } catch (error) {
       console.error('[ANTI-NUKE] Error handling guild update:', error);
@@ -621,7 +642,6 @@ export class AntiNukeSystem {
       const { executor } = botLog;
       if (!executor || await this.isWhitelisted(member.guild.id, executor.id)) return;
 
-      // Check if bot has dangerous permissions
       const botPerms = member.permissions.toArray();
       const dangerousPerms = [
         'Administrator',
@@ -637,17 +657,21 @@ export class AntiNukeSystem {
         await this.punishUser(member.guild, executor, 'DANGEROUS_BOT_ADD', 1);
         await member.kick('Anti-Nuke: Unauthorized bot with dangerous permissions');
 
-        await logSecurityEvent({
-          guildId: member.guild.id,
-          userId: executor.id,
-          eventType: 'DANGEROUS_BOT_ADD',
-          severity: 'CRITICAL',
-          details: {
-            botName: member.user.tag,
-            botId: member.user.id,
-            permissions: botPerms
-          }
-        });
+        try {
+          await logSecurityEvent({
+            guildId: member.guild.id,
+            userId: executor.id,
+            eventType: 'DANGEROUS_BOT_ADD',
+            severity: 'CRITICAL',
+            details: {
+              botName: member.user.tag,
+              botId: member.user.id,
+              permissions: botPerms
+            }
+          });
+        } catch (dbError) {
+          console.error('[ANTI-NUKE] Error logging to database:', dbError.message);
+        }
       }
 
     } catch (error) {
@@ -662,7 +686,6 @@ export class AntiNukeSystem {
       const member = await guild.members.fetch(user.id).catch(() => null);
       if (!member) return;
 
-      // Don't punish server owner
       if (member.id === guild.ownerId) {
         console.log('[ANTI-NUKE] Cannot punish server owner');
         return;
@@ -672,7 +695,6 @@ export class AntiNukeSystem {
 
       console.log(`[ANTI-NUKE] 🚨 ${isNight ? '🌙 NIGHT MODE' : ''} PUNISHING ${user.tag} for ${reason} (${actionCount} actions)`);
 
-      // Strip dangerous roles first
       const dangerousRoles = member.roles.cache.filter(role => 
         role.permissions.has(PermissionFlagsBits.Administrator) ||
         role.permissions.has(PermissionFlagsBits.ManageGuild) ||
@@ -683,7 +705,6 @@ export class AntiNukeSystem {
         await member.roles.remove(role, `Anti-Nuke: Removing dangerous role due to ${reason}`);
       }
 
-      // Apply punishment based on settings
       switch (settings.punishmentType) {
         case 'BAN':
           await member.ban({ 
@@ -700,12 +721,10 @@ export class AntiNukeSystem {
           break;
       }
 
-      // Notify owner
       if (settings.notifyOwner) {
         await this.notifyOwner(guild, user, reason, actionCount, isNight);
       }
 
-      // Lockdown if enabled (more aggressive in night mode)
       if (settings.lockdownOnTrigger || (isNight && settings.nightmodeAutoLock)) {
         await this.initiateServerLockdown(guild, reason, isNight);
       }
@@ -797,7 +816,6 @@ export class AntiNukeSystem {
       
       console.log(`[ANTI-NUKE] 🔒 ${isNight ? '🌙 NIGHT MODE' : ''} Initiating server lockdown due to ${reason}`);
 
-      // Lock all text channels
       const channels = guild.channels.cache.filter(c => c.isTextBased());
       
       for (const channel of channels.values()) {
@@ -806,7 +824,6 @@ export class AntiNukeSystem {
         }, { reason: `Anti-Nuke${isNight ? ' [NIGHT MODE]' : ''} Lockdown: ${reason}` });
       }
 
-      // Create lockdown notification channel
       const lockdownChannel = await guild.channels.create({
         name: isNight ? '🌙-night-lockdown' : '🔒-server-lockdown',
         reason: `Anti-Nuke${isNight ? ' [NIGHT MODE]' : ''}: Lockdown notification channel`

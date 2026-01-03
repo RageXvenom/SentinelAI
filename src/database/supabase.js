@@ -1,4 +1,4 @@
-// src/database/supabase.js - Complete Database Functions
+// src/database/supabase.js - Complete Database Functions with Fixed Security Logging
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
@@ -662,31 +662,59 @@ export async function isTrustedUser(guildId, discordUserId) {
 }
 
 // ============================================
-// SECURITY EVENTS FUNCTIONS
+// SECURITY EVENTS FUNCTIONS (FIXED)
 // ============================================
 
 export async function logSecurityEvent(eventData) {
   const { guildId, userId, eventType, severity, details, actionTaken } = eventData;
 
-  const { data, error } = await supabase
-    .from('security_events')
-    .insert({
-      guild_id: guildId,
-      user_id: userId,
-      event_type: eventType,
-      severity: severity,
-      details: details,
-      action_taken: actionTaken
-    })
-    .select()
-    .single();
+  try {
+    // CRITICAL FIX: userId here is a Discord snowflake ID, not the internal UUID
+    // We need to look up the internal user_id from the discord_users table
+    
+    let internalUserId = null;
+    
+    if (userId) {
+      const { data: userData, error: userError } = await supabase
+        .from('discord_users')
+        .select('id')
+        .eq('discord_user_id', userId)
+        .maybeSingle();
 
-  if (error) {
-    console.error('Error logging security event:', error);
+      if (userError) {
+        console.error('[SECURITY] Error looking up user for security event:', userError.message);
+        // Continue without user_id rather than failing completely
+      } else if (userData) {
+        internalUserId = userData.id;
+      } else {
+        console.log(`[SECURITY] User ${userId} not found in database, logging event without user_id`);
+      }
+    }
+
+    // Insert security event with the internal UUID (or null if not found)
+    const { data, error } = await supabase
+      .from('security_events')
+      .insert({
+        guild_id: guildId,
+        user_id: internalUserId, // This is now the UUID from discord_users.id
+        event_type: eventType,
+        severity: severity,
+        details: details,
+        action_taken: actionTaken
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[SECURITY] Error inserting security event:', error);
+      throw error;
+    }
+
+    return data;
+  } catch (error) {
+    console.error('[SECURITY] Error in logSecurityEvent:', error);
     throw error;
   }
-
-  return data;
 }
 
 export async function getSecurityLogs(guildId, limit = 20) {
