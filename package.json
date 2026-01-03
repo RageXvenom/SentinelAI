@@ -1,0 +1,38 @@
+{
+  "name": "discord-ai-moderation-bot",
+  "version": "2.0.0",
+  "description": "Advanced AI-powered Discord moderation bot with Groq AI and CAPTCHA verification",
+  "author": "Arvind Nag (RageXvenom Gamers)",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "build": "echo 'Build successful - Discord AI Moderation Bot ready'",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "setup": "node scripts/setup.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "moderation",
+    "ai",
+    "groq",
+    "captcha",
+    "security"
+  ],
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "@supabase/supabase-js": "^2.39.3",
+    "groq-sdk": "^0.3.0",
+    "dotenv": "^16.3.1",
+    "canvas": "^2.11.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
