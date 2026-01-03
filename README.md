@@ -1,111 +1,214 @@
 # Discord AI Moderation Bot
 
-An advanced AI-powered Discord moderation bot with intelligent risk assessment, CAPTCHA verification, and comprehensive logging via Supabase.
+A production-grade, AI-powered Discord moderation system featuring intelligent risk assessment, CAPTCHA-first verification, automated enforcement, and full audit logging powered by Supabase.
 
-## Features
+Designed for **high-risk public servers**, this bot prioritizes **server safety, false-positive reduction, and transparency** over aggressive punishment.
 
-- **AI-Powered Moderation**: Analyzes messages for spam, scams, harassment, and suspicious behavior
-- **Risk Scoring System**: 0-100 risk scoring with SAFE, SUSPICIOUS, and DANGEROUS levels
-- **CAPTCHA-First Policy**: New or suspicious users are prompted to verify via CAPTCHA before punishment
-- **Supabase Integration**: Complete logging and analytics of all moderation actions
-- **Automated Actions**: Delete, warn, mute, timeout, or kick based on risk assessment
-- **Account Age Analysis**: Considers Discord account age and server join time
-- **Historical Context**: Tracks warnings and previous violations per user
+---
 
-## Setup Instructions
+## 🚀 Overview
 
-### 1. Prerequisites
+This bot continuously monitors server activity and applies **AI-assisted moderation decisions** based on behavioral analysis, account trust signals, and historical context.
+Instead of instantly punishing users, it follows a **CAPTCHA-first, risk-aware security model**, significantly reducing server nukes, raid damage, and token-leak abuse scenarios.
 
-- Node.js 18 or higher
-- A Discord bot token ([Create one here](https://discord.com/developers/applications))
-- A Supabase project ([Create one here](https://supabase.com))
+---
 
-### 2. Install Dependencies
+## ✨ Core Features
+
+### 🧠 AI-Driven Moderation Engine
+
+* Detects **spam, phishing, scams, impersonation, harassment, and raid patterns**
+* Uses contextual message analysis instead of keyword-only filtering
+* Produces explainable moderation decisions
+
+### 📊 Risk Scoring System (0–100)
+
+| Risk Level | Score Range | Behavior                  |
+| ---------- | ----------- | ------------------------- |
+| SAFE       | 0–30        | No action                 |
+| SUSPICIOUS | 31–65       | Warning / message removal |
+| DANGEROUS  | 66–100      | Timeout / kick / ban      |
+
+### 🧩 CAPTCHA-First Protection Model
+
+Users are **verified before punishment**, preventing false bans:
+
+* New Discord accounts
+* Recently joined members
+* Previously warned users
+* High-risk but unverified activity
+
+### 🗄️ Supabase-Powered Logging & Analytics
+
+* Complete moderation audit trail
+* User behavior history
+* Warning escalation tracking
+* Server-specific configuration support
+
+### ⚙️ Automated Enforcement
+
+* Message deletion
+* Warning issuance
+* Timeout / mute
+* Kick or ban (configurable)
+
+### 🕒 Trust & Context Awareness
+
+* Discord account age analysis
+* Server join time evaluation
+* Prior warning history
+* CAPTCHA verification status
+
+---
+
+## 🛠️ Technology Stack
+
+* **Node.js 18+**
+* **Discord.js**
+* **Groq AI API**
+* **Supabase (PostgreSQL + RLS)**
+* **Environment-based secure configuration**
+
+---
+
+## 📦 Setup Guide
+
+### 1️⃣ Prerequisites
+
+* Node.js **v18 or higher**
+* Discord Bot Token
+  → [https://discord.com/developers/applications](https://discord.com/developers/applications)
+* Supabase Project
+  → [https://supabase.com](https://supabase.com)
+
+---
+
+### 2️⃣ Install Dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Configure Environment Variables
+---
 
-Copy `.env.example` to `.env` and fill in your credentials:
+### 3️⃣ Environment Configuration
+
+Copy the example file and configure secrets:
 
 ```bash
 cp .env.example .env
 ```
 
-Required variables:
-- `DISCORD_BOT_TOKEN`: Your Discord bot token
-- `SUPABASE_URL`: Your Supabase project URL
-- `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key (found in project settings)
+**Required variables**
 
-### 4. Discord Bot Permissions
+* `DISCORD_BOT_TOKEN`
+* `SUPABASE_URL`
+* `SUPABASE_SERVICE_ROLE_KEY`
+* `GROQ_API_KEY`
 
-Your bot needs the following permissions:
-- Read Messages/View Channels
-- Send Messages
-- Manage Messages (to delete)
-- Timeout Members (to mute)
-- Kick Members (for severe violations)
+> ⚠️ Never commit `.env` to GitHub
 
-Invite URL format:
+---
+
+### 4️⃣ Required Discord Permissions
+
+The bot requires the following permissions:
+
+* View Channels
+* Read Message History
+* Send Messages
+* Manage Messages
+* Timeout Members
+* Kick Members
+
+**Invite URL template**
+
 ```
 https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=1099511627830&scope=bot
 ```
 
-### 5. Run the Bot
+---
+
+### 5️⃣ Start the Bot
 
 ```bash
 npm start
 ```
 
-## How It Works
+---
 
-### Message Analysis
+## 🧠 System Architecture
 
-When a user sends a message, the bot:
-1. Collects message metadata (content, links, attachments, etc.)
-2. Retrieves user history from Supabase
-3. Sends data to the AI moderation engine
-4. Receives a risk assessment with recommended action
-5. Executes the action automatically
-6. Logs everything to Supabase
+### Message Processing Flow
 
-### CAPTCHA-First Policy
+1. Capture message metadata (content, links, embeds)
+2. Fetch user & server history from Supabase
+3. Run AI-based risk evaluation
+4. Determine enforcement level
+5. Apply moderation action
+6. Persist logs & reasoning to database
 
-If a user meets ANY of these criteria:
-- Account age < 7 days
-- Server join time < 10 minutes
-- Has previous warnings
-- AND has not verified CAPTCHA
+---
 
-The bot will:
-- Restrict messaging temporarily
-- Request CAPTCHA verification
-- NOT punish the user immediately
+## 🔐 CAPTCHA-First Verification Logic
 
-### Risk Levels
+A CAPTCHA challenge is triggered when **any** of the following conditions are met:
 
-- **SAFE (0-30)**: Message allowed, no action taken
-- **SUSPICIOUS (31-65)**: Warning issued, message may be deleted
-- **DANGEROUS (66-100)**: Immediate action (mute, timeout, or kick)
+* Discord account age < **7 days**
+* Server join time < **10 minutes**
+* Existing warning history
+* Suspicious AI risk score
+* User not yet verified
 
-## Database Schema
+### CAPTCHA Outcome
 
-The bot uses the following Supabase tables:
-- `discord_users`: User profiles and CAPTCHA status
-- `server_members`: Server-specific membership data
-- `messages`: Message metadata (privacy-preserving)
-- `moderation_actions`: All moderation decisions with reasoning
-- `user_warnings`: Warning history per user
+* ✔️ Verified → restrictions lifted
+* ❌ Failed / timeout → automated removal (optional)
 
-## Security
+This prevents:
 
-- All secrets are stored in environment variables
-- Message content is hashed, not stored in plaintext
-- Row Level Security (RLS) enabled on all tables
-- Service role key is never exposed to clients
+* Bot raids
+* Token-leak exploitation
+* Instant server nukes
+* False bans on legitimate users
 
-## Support
+---
 
-For issues or questions, please refer to the code documentation or create an issue in the repository.
+## 🗃️ Database Schema (Supabase)
+
+| Table                | Purpose                         |
+| -------------------- | ------------------------------- |
+| `discord_users`      | CAPTCHA status & trust flags    |
+| `server_members`     | Server-specific user data       |
+| `messages`           | Privacy-safe message metadata   |
+| `moderation_actions` | Decisions, reasons & timestamps |
+| `user_warnings`      | Escalation history              |
+
+---
+
+## 🔒 Security Design
+
+* All secrets stored via environment variables
+* **Service role key never exposed**
+* Message content hashed (no plaintext storage)
+* Supabase **Row Level Security (RLS)** enforced
+* Abuse-resistant by design for public servers
+
+---
+
+## 🧪 Ideal Use Cases
+
+* Public Discord communities
+* Security-focused servers
+* Bots & developer servers
+* Crypto / NFT communities
+* High-traffic entertainment servers
+
+---
+
+## 📄 License
+
+MIT License 
+
+---
+
